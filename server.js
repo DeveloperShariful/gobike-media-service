@@ -16,13 +16,22 @@ const ffmpegPath = require('ffmpeg-static');
 const app = express();
 const PORT = process.env.PORT || 39281;
 const SECRET = process.env.UPLOAD_SECRET || '';
-const PUBLIC_HTML = path.join(__dirname, '..', 'public_html', 'uploads');
+// Hardcoded to the original addon-website's directory tree, NOT __dirname —
+// this app now runs as a Hostinger "Web App" (managed Node.js), which
+// deploys into a fresh, versioned hbuilds/versions/<uuid>/ folder on every
+// redeploy. Anything written relative to __dirname would vanish the next
+// time this app is redeployed. media.gobike.au itself is a plain addon
+// website (not versioned), so its public_html/originals are stable storage
+// that survives redeploys of this app, and its public_html is already
+// served at the exact https://media.gobike.au/uploads/... URLs below.
+const SITE_ROOT = '/home/u485644621/domains/media.gobike.au';
+const PUBLIC_HTML = path.join(SITE_ROOT, 'public_html', 'uploads');
 const TMP_DIR = path.join(__dirname, 'tmp');
 // Untouched copy of every upload, kept as a backup before any compression/
 // transcode happens — a sibling of public_html (NOT inside it), so these
 // never become web-accessible by URL. Some of what lands here (warranty
 // claim photos, affiliate KYC docs) shouldn't be guessable/public.
-const ORIGINALS_DIR = path.join(__dirname, '..', 'originals');
+const ORIGINALS_DIR = path.join(SITE_ROOT, 'originals');
 // Next.js app's webhook — told once, per-video, when background transcoding
 // finishes, so it can update Media.qualityScore / transcodePending. Best-
 // effort: if this fails, the video itself is still fully fine (already
