@@ -37,10 +37,16 @@ const app = express();
 const PORT = process.env.PORT || 39281;
 const SECRET = process.env.UPLOAD_SECRET || '';
 
-// FTP account scoped to media.gobike.au's own public_html (created specifically
-// for this app — see hPanel > media.gobike.au > Files > FTP Accounts). Its
-// root ("/") IS public_html, so a remote path like "uploads/image/x.webp"
-// lands at media.gobike.au/public_html/uploads/image/x.webp.
+// FTP account for media.gobike.au (created specifically for this app — see
+// hPanel > media.gobike.au > Files > FTP Accounts). A fresh login's default
+// working directory is "/public_html", but "/" (once explicitly cd'd to,
+// see withFtp() below) is the site's own root, one level ABOVE public_html —
+// confirmed by testing: `CWD /` then `PWD` returns "/", not "/public_html".
+// So every remote path here is written out in full from that true root:
+// "public_html/uploads/..." for served files, "originals/..." for the
+// private backup (a genuine sibling of public_html, same as the pre-Web-App
+// architecture — NOT web-reachable, unlike an earlier attempt at this that
+// assumed the root was public_html and landed backups inside it instead).
 const FTP_HOST = process.env.FTP_HOST || '77.37.79.94';
 const FTP_USER = process.env.FTP_USER || '';
 const FTP_PASSWORD = process.env.FTP_PASSWORD || '';
@@ -118,6 +124,7 @@ async function withFtp(fn) {
   const client = new ftp.Client(30_000);
   try {
     await client.access({ host: FTP_HOST, user: FTP_USER, password: FTP_PASSWORD, secure: false });
+    await client.cd('/'); // normalize away from the "/public_html" default login dir — see note above
     return await fn(client);
   } finally {
     client.close();
@@ -146,23 +153,20 @@ async function uploadFileToFtp(client, localPath, remoteDir, remoteName) {
 // Untouched copy of every upload, kept as a backup before any compression/
 // transcode happens — never read back by this service, purely a safety net
 // (e.g. a warranty claim or affiliate KYC document that later needs to be
-// viewed at full original quality, not the web-compressed copy). Deliberately
-// NOT under uploads/ and named with a random token rather than the original
-// filename/slug — this FTP account can only reach public_html (confirmed:
-// there is no way to escape it to a sibling, non-web-served folder), so
-// anything written here is technically servable by URL like everything else
-// in public_html; an unguessable path is the only realistic protection
-// (directory listing is confirmed disabled — 403 — so it can't be browsed,
-// only reached by someone who already has the exact random path).
+// viewed at full original quality, not the web-compressed copy). Lives in
+// "originals/", a genuine sibling of public_html — outside the web root
+// entirely, not just an obscure path inside it — so it's never web-reachable
+// by any URL, matching how this folder worked before this app moved to
+// Hostinger's Web App hosting type. Still keyed by a random token rather
+// than the original filename/slug (defense in depth, and slugs risk
+// collisions across unrelated uploads that a random token can't).
 async function backupOriginalToFtp(client, localPath, type, folder, ext) {
-  const remoteDir = `_originals/${type}/${folder}`;
+  const remoteDir = `originals/${type}/${folder}`;
   const remoteName = crypto.randomBytes(16).toString('hex') + ext;
-  console.log(`[backup] attempting: localPath=${localPath} -> ${remoteDir}/${remoteName}`);
   try {
     await uploadFileToFtp(client, localPath, remoteDir, remoteName);
-    console.log(`[backup] OK: ${remoteDir}/${remoteName}`);
   } catch (err) {
-    console.error('[backup] failed to save original (upload itself is unaffected):', err.message, err.stack);
+    console.error('[backup] failed to save original (upload itself is unaffected):', err.message);
   }
 }
 
@@ -275,7 +279,7 @@ async function ftpDirStats(client, remoteDir) {
 
 app.get('/stats', checkAuth, async (req, res) => {
   try {
-    const stats = await withFtp((client) => ftpDirStats(client, 'uploads'));
+    const stats = await withFtp((client) => ftpDirStats(client, 'public_html/uploads'));
     res.json({ ok: true, ...stats });
   } catch (err) {
     console.error('[stats] failed:', err.message);
@@ -458,7 +462,7 @@ app.post('/upload', checkAuth, upload.single('file'), async (req, res) => {
 
   try {
     if (isVideo) {
-      const remoteDir = `uploads/video/${folder}`;
+      const remoteDir = `public_html/uploads/video/${folder}`;
       const existing = await withFtp((client) => listRemoteNames(client, remoteDir));
       const outName = uniqueName(existing, '.mp4', file.originalname);
 
@@ -488,7 +492,7 @@ app.post('/upload', checkAuth, upload.single('file'), async (req, res) => {
         size: file.size, originalSize: file.size, // same for now — the callback updates `size` once compressed
       });
     } else {
-      const remoteDir = `uploads/image/${folder}`;
+      const remoteDir = `public_html/uploads/image/${folder}`;
 
       // GIF (animation) and SVG (vector) must never be re-encoded as a
       // raster WebP — that would break animation / rasterize a vector.
@@ -569,15 +573,15 @@ app.post('/upload', checkAuth, upload.single('file'), async (req, res) => {
 });
 
 // { path: "image/general/abcd1234.jpg" } — the part after /uploads/. Resolved
-// against "uploads/" and checked to stay inside it so a crafted "../../.."
-// path can never delete anything outside the uploads folder.
+// against "public_html/uploads/" and checked to stay inside it so a crafted
+// "../../.." path can never delete anything outside the uploads folder.
 app.post('/delete', express.json(), checkAuth, async (req, res) => {
   const relPath = req.body?.path;
   if (!relPath || typeof relPath !== 'string') {
     return res.status(400).json({ error: 'Missing path' });
   }
-  const normalized = path.posix.normalize(`uploads/${relPath}`);
-  if (!normalized.startsWith('uploads/') || normalized.includes('..')) {
+  const normalized = path.posix.normalize(`public_html/uploads/${relPath}`);
+  if (!normalized.startsWith('public_html/uploads/') || normalized.includes('..')) {
     return res.status(400).json({ error: 'Invalid path' });
   }
   try {
