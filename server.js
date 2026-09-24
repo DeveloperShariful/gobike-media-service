@@ -155,12 +155,14 @@ async function uploadFileToFtp(client, localPath, remoteDir, remoteName) {
 // (directory listing is confirmed disabled — 403 — so it can't be browsed,
 // only reached by someone who already has the exact random path).
 async function backupOriginalToFtp(client, localPath, type, folder, ext) {
+  const remoteDir = `_originals/${type}/${folder}`;
+  const remoteName = crypto.randomBytes(16).toString('hex') + ext;
+  console.log(`[backup] attempting: localPath=${localPath} -> ${remoteDir}/${remoteName}`);
   try {
-    const remoteDir = `_originals/${type}/${folder}`;
-    const remoteName = crypto.randomBytes(16).toString('hex') + ext;
     await uploadFileToFtp(client, localPath, remoteDir, remoteName);
+    console.log(`[backup] OK: ${remoteDir}/${remoteName}`);
   } catch (err) {
-    console.error('[backup] failed to save original (upload itself is unaffected):', err.message);
+    console.error('[backup] failed to save original (upload itself is unaffected):', err.message, err.stack);
   }
 }
 
