@@ -143,6 +143,27 @@ async function uploadFileToFtp(client, localPath, remoteDir, remoteName) {
   await client.cd('/'); // reset cwd so a later ensureDir() in the same connection isn't relative to this one
 }
 
+// Untouched copy of every upload, kept as a backup before any compression/
+// transcode happens — never read back by this service, purely a safety net
+// (e.g. a warranty claim or affiliate KYC document that later needs to be
+// viewed at full original quality, not the web-compressed copy). Deliberately
+// NOT under uploads/ and named with a random token rather than the original
+// filename/slug — this FTP account can only reach public_html (confirmed:
+// there is no way to escape it to a sibling, non-web-served folder), so
+// anything written here is technically servable by URL like everything else
+// in public_html; an unguessable path is the only realistic protection
+// (directory listing is confirmed disabled — 403 — so it can't be browsed,
+// only reached by someone who already has the exact random path).
+async function backupOriginalToFtp(client, localPath, type, folder, ext) {
+  try {
+    const remoteDir = `_originals/${type}/${folder}`;
+    const remoteName = crypto.randomBytes(16).toString('hex') + ext;
+    await uploadFileToFtp(client, localPath, remoteDir, remoteName);
+  } catch (err) {
+    console.error('[backup] failed to save original (upload itself is unaffected):', err.message);
+  }
+}
+
 // ─── NAMING ─────────────────────────────────────────────────────────────────
 // Slug from the ORIGINAL uploaded filename (e.g. "20 Inch GoBike Electric
 // Balance Bike.jpg" -> "20-inch-gobike-electric-balance-bike") so the final
@@ -447,7 +468,14 @@ app.post('/upload', checkAuth, upload.single('file'), async (req, res) => {
       fs.unlink(file.path, () => {});
 
       // Raw bytes go live immediately — playable right away, just not yet compressed.
-      await withFtp((client) => uploadFileToFtp(client, localRawPath, remoteDir, outName));
+      // Backed up as the "original" here (not after transcoding) since the
+      // queue worker later overwrites this same file in place with the
+      // compressed version — this is the last point these exact bytes exist.
+      const videoExt = path.extname(file.originalname) || '.mp4';
+      await withFtp(async (client) => {
+        await uploadFileToFtp(client, localRawPath, remoteDir, outName);
+        await backupOriginalToFtp(client, localRawPath, 'video', folder, videoExt);
+      });
 
       const url = `https://media.gobike.au/uploads/video/${folder}/${outName}`;
       enqueue({ url, localRawPath, remoteDir, remoteName: outName, folder, originalSize: file.size });
@@ -502,7 +530,11 @@ app.post('/upload', checkAuth, upload.single('file'), async (req, res) => {
           const qualityScore = await computeSSIM(outPath, file.path);
           const compressedSize = fs.statSync(outPath).size;
 
-          await withFtp((client) => uploadFileToFtp(client, outPath, remoteDir, outName));
+          const imageExt = path.extname(file.originalname) || '.jpg';
+          await withFtp(async (client) => {
+            await uploadFileToFtp(client, outPath, remoteDir, outName);
+            await backupOriginalToFtp(client, file.path, 'image', folder, imageExt);
+          });
           fs.unlink(outPath, () => {});
           fs.unlink(file.path, () => {});
           const url = `https://media.gobike.au/uploads/image/${folder}/${outName}`;
