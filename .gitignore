@@ -1,0 +1,6 @@
+node_modules/
+.env
+tmp/
+transcode-queue.json
+*.log
+*.bak-*
