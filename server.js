@@ -1,10 +1,18 @@
-// media.gobike.au upload+transcode service
+// media.gobike.au upload+transcode service, running on medianew.gobike.au
+// (see STORAGE note below for why the domain split).
 // - video -> saved raw immediately (URL is final right away), then
 //   transcoded (H.264/AAC MP4) by a background queue worker — see the
 //   "ASYNC VIDEO TRANSCODE QUEUE" section below for why.
 // - image -> compressed synchronously (fast enough not to need queuing).
-// Auth: shared-secret header (x-upload-secret), matches UPLOAD_SECRET env var.
 //
+// AUTH: two modes, same as the old upload.php bridge this replaces —
+// (1) a static shared secret (x-upload-secret) for server-to-server calls
+//     (delete/stats, called from Next.js server code that can hold the raw
+//     secret), and (2) a short-lived HMAC signature (x-upload-timestamp +
+//     x-upload-signature over "timestamp:folder") for the browser's direct
+//     upload, which must never see the raw secret. This app is now the
+//     public-facing endpoint itself (no PHP bridge in front of it anymore),
+//     so it also needs to handle CORS for the direct browser calls.
 // STORAGE: this app runs as a Hostinger "Web App" (managed Node.js), which
 // deploys into a fresh, versioned hbuilds/versions/<uuid>/ folder on every
 // redeploy, and — confirmed by direct testing — its local filesystem writes
@@ -47,12 +55,58 @@ fs.mkdirSync(TMP_DIR, { recursive: true });
 
 const upload = multer({ dest: TMP_DIR, limits: { fileSize: 500 * 1024 * 1024 } }); // 500MB cap
 
-function checkAuth(req, res, next) {
-  const provided = req.header('x-upload-secret');
-  if (!SECRET || provided !== SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+// Same allowed origins / preflight response the old upload.php bridge sent —
+// this app is now the direct target of the browser's cross-origin POST.
+const ALLOWED_ORIGINS = new Set(['https://gobike.au', 'https://www.gobike.au']);
+function isAllowedOrigin(origin) {
+  if (!origin) return false;
+  return ALLOWED_ORIGINS.has(origin) || /^http:\/\/localhost:\d+$/.test(origin);
+}
+app.use((req, res, next) => {
+  const origin = req.header('origin');
+  if (isAllowedOrigin(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'x-upload-timestamp, x-upload-signature, x-upload-secret, Content-Type');
+  res.setHeader('Access-Control-Max-Age', '600');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
+});
+
+const SIGNATURE_MAX_AGE_SECONDS = 600; // matches the old upload.php bridge
+
+function timingSafeEqualHex(expectedHex, providedHex) {
+  const a = Buffer.from(expectedHex, 'hex');
+  const b = Buffer.from(providedHex, 'hex');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+// Folder is read from the query string, not the multipart body — this
+// middleware runs before multer parses the body, so req.body isn't
+// populated yet. hostinger-sign/route.ts bakes the same folder value it
+// signed into the returned uploadUrl's query string for exactly this reason.
+function checkAuth(req, res, next) {
+  if (!SECRET) return res.status(401).json({ error: 'Unauthorized' });
+
+  const staticSecret = req.header('x-upload-secret');
+  if (staticSecret && staticSecret === SECRET) return next();
+
+  const timestamp = req.header('x-upload-timestamp');
+  const signature = req.header('x-upload-signature');
+  if (timestamp && signature) {
+    if (Math.abs(Date.now() / 1000 - Number(timestamp)) > SIGNATURE_MAX_AGE_SECONDS) {
+      return res.status(401).json({ error: 'Signature expired' });
+    }
+    const folder = typeof req.query.folder === 'string' ? req.query.folder : 'general';
+    const expected = crypto.createHmac('sha256', SECRET).update(`${timestamp}:${folder}`).digest('hex');
+    try {
+      if (timingSafeEqualHex(expected, signature)) return next();
+    } catch {
+      // malformed signature (bad hex/length) — falls through to Unauthorized
+    }
+  }
+
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 // ─── FTP HELPERS ────────────────────────────────────────────────────────────
