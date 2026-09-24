@@ -247,6 +247,65 @@ async function computeSSIM(distPath, refPath) {
   return raw === null ? null : raw * 100;
 }
 
+// Simple branded landing page — this service has no UI of its own (every
+// other route is a JSON API meant to be called by code, not browsed), but a
+// bare "Cannot GET /" looked broken to a visitor who typed the domain
+// directly. Purely cosmetic — doesn't touch any of the actual API routes.
+app.get('/', (req, res) => {
+  res.type('html').send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoBike Media Service</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0a0a0a;
+    color: #f5f5f5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    text-align: center;
+    padding: 24px;
+  }
+  .card { max-width: 480px; }
+  .logo {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    color: #ffd60a;
+    margin-bottom: 8px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; color: #f5f5f5; }
+  p { font-size: 14px; line-height: 1.6; color: #a3a3a3; margin: 0 0 24px; }
+  a.home {
+    display: inline-block;
+    padding: 10px 22px;
+    background: #ffd60a;
+    color: #0a0a0a;
+    font-weight: 700;
+    font-size: 14px;
+    text-decoration: none;
+    border-radius: 8px;
+  }
+  a.home:hover { background: #ffe14d; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">GoBike</div>
+    <h1>Media Processing Service</h1>
+    <p>This is a backend service that compresses and transcodes images and videos for the GoBike Australia website. It has no content of its own to browse.</p>
+    <a class="home" href="https://gobike.au">Visit GoBike Australia →</a>
+  </div>
+</body>
+</html>`);
+});
+
 app.get('/health', (req, res) => res.json({ ok: true, ffmpeg: !!ffmpegPath, queue: queue.length }));
 
 // uploads/ ফোল্ডারের মোট সাইজ + ফাইল সংখ্যা রিপোর্ট করে — admin media
