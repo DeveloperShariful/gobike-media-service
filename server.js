@@ -555,6 +555,9 @@ app.post('/upload', checkAuth, upload.single('file'), async (req, res) => {
 
       // GIF (animation) and SVG (vector) must never be re-encoded as a
       // raster WebP — that would break animation / rasterize a vector.
+      // WebP is skipped too: it's already web-optimised and usually exported
+      // on purpose at the exact size/quality wanted, so a second lossy pass
+      // only costs quality (and would flatten an animated WebP).
       // Copy these through as-is; everything else gets Cloudinary-style
       // q_auto/f_auto treatment: convert to WebP (universally supported,
       // smaller than JPEG/PNG at equal visual quality) at a near-lossless
@@ -564,7 +567,9 @@ app.post('/upload', checkAuth, upload.single('file'), async (req, res) => {
       // stays synchronous — a still image compresses in a couple seconds,
       // nowhere near long enough to need the video's async treatment.
       const mime = file.mimetype || '';
-      const skipCompression = mime === 'image/gif' || mime === 'image/svg+xml';
+      const ext0 = path.extname(file.originalname || '').toLowerCase();
+      const isWebp = mime === 'image/webp' || ext0 === '.webp';
+      const skipCompression = mime === 'image/gif' || mime === 'image/svg+xml' || isWebp;
 
       if (!skipCompression) {
         try {
